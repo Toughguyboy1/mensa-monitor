@@ -1,0 +1,59 @@
+name: MENSA Exam Page Monitor
+
+on:
+  schedule:
+    # 5分ごとに実行 (UTC基準だが実質関係なし)
+    - cron: "*/5 * * * *"
+  workflow_dispatch:  # 手動実行を許可
+  push:
+    branches: [main]
+    paths:
+      - "monitor.py"
+      - ".github/workflows/monitor.yml"
+
+# 同時実行を防ぐ（5分毎で前回が長引いても安全）
+concurrency:
+  group: mensa-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # state.txt / state.hash を commit するために必要
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 依存関係をインストール
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 監視スクリプトを実行
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER:  ${{ secrets.PUSHOVER_USER }}
+          TARGET_URL:     ${{ vars.TARGET_URL || 'https://mensa.jp/exam/' }}
+        run: python monitor.py
+
+      - name: 状態ファイルの変更を commit
+        run: |
+          if [[ -n "$(git status --porcelain state.txt state.hash 2>/dev/null)" ]]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.txt state.hash
+            git commit -m "chore: update monitor state [skip ci]"
+            git push
+          else
+            echo "state ファイルに変更なし。commit をスキップします。"
+          fi
